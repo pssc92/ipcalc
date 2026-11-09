@@ -170,8 +170,7 @@ EOF
      if (defined $ARGV[1]) {
 	$mask1 = check_mask6($ARGV[1]);
 	if ($mask1 == -1) {
-           print "INVALID MASK1\n\n";
-           exit;
+           $error .= "INVALID MASK1:   $ARGV[1]\n";
         }
      } else {
         $mask1 = 64;
@@ -998,40 +997,109 @@ sub ntob6
 }
 
 
-sub print_summary6
+sub printline6
 {
-	my $address = shift;
-	my $netmask = shift;
-	printf "%-9s","Address:";
-	printf "%-40s",ntoip6($address);
-	printf "%-130s",ntob6($address);
-	print "\n";
-	printf "%-9s","Netmask:";
-	printf "%-40s",$netmask;
-	printf "%-130s",ntob6(prefixlenton($netmask));
-	print "\n";
-	
-	printf "%-9s","Prefix:";
-	printf "%-40s",ntoip6($address & prefixlenton($netmask))."/".$netmask;
-	printf "%-130s",ntob6($address & prefixlenton($netmask));
-	print "\n";
-	
+	my ($label,$address,$prefixlen,$second_field,$is_netmask) = @_;
+	my $line = '';
+	my $bit_color = $is_netmask ? $mask_color : $binry_color;
+	printf "%s%-11s",set_color($norml_color),"$label:";
+	print set_color($quads_color);
+	printf "%-47s",$second_field;
+	if ($opt_print_bits) {
+		$line .= set_color($bit_color);
+		for (my $i=1;$i<129;$i++) {
+			$line .= (($address >> (128-$i)) & 1) ? "1" : "0";
+			if ($i % 16 == 0 && $i < 128) {
+				$line .= set_color($norml_color) . ':' . set_color($bit_color);
+			}
+			if ($i == $prefixlen && $i < 128) {
+				$line .= " ";
+			}
+		}
+		$line .= set_color($norml_color);
+		print $line;
+	}
+	print set_color($norml_color);
 	print "\n";
 }
 
+sub get_description6
+{
+	my $network = shift;
+	my $prefixlen = shift;
+	my @description;
+	# most specific blocks first
+	my @blocks = (
+		[ "::",          128, "Unspecified Address" ],
+		[ "::1",         128, "Loopback Address" ],
+		[ "::ffff:0:0",   96, "IPv4-mapped Address" ],
+		[ "64:ff9b::",    96, "IPv4/IPv6 Translation" ],
+		[ "100::",        64, "Discard-Only Address Block" ],
+		[ "2001:db8::",   32, "Documentation" ],
+		[ "2001::",       32, "Teredo" ],
+		[ "2002::",       16, "6to4" ],
+		[ "2000::",        3, "Global Unicast" ],
+		[ "fc00::",        7, "Unique Local Address" ],
+		[ "fe80::",       10, "Link-Local Unicast" ],
+		[ "ff00::",        8, "Multicast" ],
+	);
+	foreach my $block (@blocks) {
+		my ($prefix,$len,$text) = @$block;
+		next if $prefixlen < $len;
+		if (($network & prefixlenton($len)) == ip6ton($prefix)) {
+			push @description, $text;
+			last;
+		}
+	}
+	if ($prefixlen == 127) {
+		push @description, "PtP Link RFC 6164";
+	}
+	if (! @description) {
+		push @description, "Reserved";
+	}
+	return join ", ",@description;
+}
 
 sub ipcalc6
 {
-   #print "welcome to ipv6\n";
-   my $address = shift;
-   my $address2 = shift;
-   my $mask1 = shift;
-   my $mask2 = shift;
-   #print "$address\n";
-   #print ntoip6($address);
-   #print "\n";
-   print_summary6($address,$mask1);
-   exit;
+	my $address = shift;
+	my $address2 = shift;
+	my $prefixlen = shift;
+	my $all_ones = (1 << 128) - 1;
+	my $netmask = prefixlenton($prefixlen);
+	my $wildcard = $all_ones ^ $netmask;
+	my $network = $address & $netmask;
+	my $broadcast = $network | $wildcard;
+	my ($hmin,$hmax,$hostn);
+
+	printline6("Address",  $address, $prefixlen, ntoip6($address));
+	printline6("Netmask",  $netmask, $prefixlen, ntoip6($netmask)." = $prefixlen",1);
+	printline6("Wildcard", $wildcard,$prefixlen, ntoip6($wildcard));
+	print "=>\n";
+
+	if ($prefixlen == 128) {
+		$hostn = 1;
+		printline6("Hostroute",$network,$prefixlen,ntoip6($network));
+	} else {
+		if ($prefixlen == 127) {
+			$hmin  = $network;
+			$hmax  = $broadcast;
+			$hostn = 2;
+		} else {
+			$hmin  = $network + 1;
+			$hmax  = $broadcast - 1;
+			$hostn = $hmax - $hmin + 1;
+		}
+		printline6("Network",  $network,  $prefixlen,ntoip6($network)."/$prefixlen");
+		printline6("HostMin",  $hmin,     $prefixlen,ntoip6($hmin));
+		printline6("HostMax",  $hmax,     $prefixlen,ntoip6($hmax));
+		printline6("Broadcast",$broadcast,$prefixlen,ntoip6($broadcast)) if $prefixlen < 127;
+	}
+	printf "%s%-11s",set_color($norml_color),"Hosts/Net:";
+	printf "%s%-47s",set_color($quads_color),$hostn;
+	print set_color($class_color) . get_description6($network,$prefixlen) . set_color($norml_color);
+	print "\n\n";
+	exit;
 }
 
 
@@ -1158,7 +1226,7 @@ sub prefixlenton
 {
 	my $prefixlen = shift;
 	my $n = 0;
-	for (my $i=128;$i>127-$prefixlen;$i--) {
+	for (my $i=127;$i>127-$prefixlen;$i--) {
 		$n += p2($i);
 	}
 	return $n;
@@ -1167,6 +1235,7 @@ sub prefixlenton
 sub check_mask6
 {
    my $mask = shift;
+   $mask =~ s/^\///;
    if ($mask !~ /^\d{1,3}$/ || $mask < 0 || $mask > 128) {
       return -1;
    }
